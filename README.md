@@ -391,7 +391,11 @@ dynamic pairs and which have all three pair classes. To repeat the analysis:
 python3 -m llm_test_generation.analyze_icall_pairs \
   --collection-root /data/icflow-dynamic \
   --llvm-nm "$LLVM_BUILD/bin/llvm-nm" \
-  --output /data/icflow-dynamic/icall-pair-manifest.json
+  --output /data/icflow-dynamic/icall-pair-manifest.json \
+  --require-dynamic \
+  --require-static \
+  --require-same-type-non-address-taken \
+  --require-dynamic-covered
 ```
 
 Verify the binary/ground-truth pairs:
