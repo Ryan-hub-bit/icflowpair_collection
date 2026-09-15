@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -uo pipefail
+umask 0002
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ARCH_LIST_ROOT=${ARCH_LIST_ROOT:-"$HOME/arch_packages"}
