@@ -3,10 +3,12 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from llm_test_generation.analyze_icall_pairs import (
     analyze_pair_sets,
     load_dynamic_edges,
+    main,
     parse_label,
     parse_nm_output,
 )
@@ -137,6 +139,35 @@ class PairAnalysisTests(unittest.TestCase):
         self.assertEqual(report["summary"]["dynamic_pairs_unclassified_count"], 2)
         self.assertEqual(report["summary"]["unmatched_dynamic_callsite_count"], 1)
         self.assertFalse(report["summary"]["all_dynamic_pairs_covered_by_static"])
+
+    def test_collection_coverage_requirement_uses_aggregate_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            aggregate = {
+                "summary": {
+                    "all_dynamic_pairs_covered_by_static": True,
+                    "has_dynamic_pairs": True,
+                    "has_static_pairs": True,
+                    "has_same_type_non_address_taken_pairs": True,
+                },
+                "errors": [],
+            }
+            with patch(
+                "llm_test_generation.analyze_icall_pairs.analyze_collection",
+                return_value=aggregate,
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--collection-root",
+                            str(root),
+                            "--llvm-nm",
+                            "/bin/false",
+                            "--require-dynamic-covered",
+                        ]
+                    ),
+                    0,
+                )
 
 
 if __name__ == "__main__":

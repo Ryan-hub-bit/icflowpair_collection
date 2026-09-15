@@ -517,7 +517,14 @@ def main(argv: list[str] | None = None) -> int:
         write_json(args.output, result)
 
     failures = check_requirements(result["summary"], args)
-    if result.get("elf_type") != "ET_EXEC" and args.require_dynamic_covered:
+    # Collection reports aggregate multiple binaries and therefore do not
+    # have a top-level elf_type.  Each binary's comparability is already
+    # accounted for by analyze_collection's aggregate flag.
+    if (
+        args.binary is not None
+        and result.get("elf_type") != "ET_EXEC"
+        and args.require_dynamic_covered
+    ):
         failures.append("dynamic/static address coverage requires an ET_EXEC non-PIE binary")
     if result.get("errors"):
         failures.append(f"collection contains {len(result['errors'])} analysis error(s)")
