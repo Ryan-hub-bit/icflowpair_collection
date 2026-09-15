@@ -13,10 +13,12 @@ ENV LLVM_BUILD=/home/icflow/llvm-project/build \
 
 RUN test -x "$LLVM_BUILD/bin/clang" \
     && test -x "$LLVM_BUILD/bin/ld.lld" \
+    && test -x "$LLVM_BUILD/bin/llvm-nm" \
     && test -x "$PIN_ROOT/pin" \
     && test -f "$PINTOOL" \
     && python -m unittest discover -s /workspace/icflow_dynamic_collection/llm_test_generation/tests -v \
     && bash -n /workspace/icflow_dynamic_collection/verify_llm_pipeline.sh \
+    && bash -n /workspace/icflow_dynamic_collection/collect_dynamic.sh \
     && mkdir -p /data \
     && chown icflow:icflow /data
 

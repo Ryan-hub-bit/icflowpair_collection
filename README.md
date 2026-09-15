@@ -257,6 +257,26 @@ Save this run's `*_icall.json` files separately. Some projects use `ctest` or a
 custom command instead of literal `make check`; use the command recorded in
 Step 1.
 
+Join a non-PIE binary's static labels with its dynamic edges to obtain all
+three per-callsite target sets:
+
+```bash
+python3 -m llm_test_generation.analyze_icall_pairs \
+  "$PROJECT_SOURCE/program.orig" \
+  --icall-json "$PROJECT_SOURCE/program.orig_icall.json" \
+  --llvm-nm "$LLVM_BUILD/bin/llvm-nm" \
+  --output /data/program-pairs.json \
+  --require-dynamic \
+  --require-static \
+  --require-same-type-non-address-taken \
+  --require-dynamic-covered
+```
+
+The static target set comes from function-kind `1` labels. The
+same-function-type but local/non-address-taken set comes from function-kind `2`
+labels. The report keeps those sets separate and checks each Pin edge against
+the kind `1` static set.
+
 ### Step 8: count the new indirect-call pairs
 
 Compare directories that have the same relative `*_icall.json` filenames:
@@ -360,6 +380,18 @@ WORK_ROOT=/data/icflow-sample-work \
 ./collect_dynamic.sh "$PWD/test-packages.txt" /data/icflow-dynamic
 ```
 
+`collect_dynamic.sh` now writes an `icall-pair-manifest.json` at the collection
+root, a manifest per package, and a `*_pairs.json` next to each captured
+`*_icall.json`. The root manifest lists exactly which captured binaries have
+dynamic pairs and which have all three pair classes. To repeat the analysis:
+
+```bash
+python3 -m llm_test_generation.analyze_icall_pairs \
+  --collection-root /data/icflow-dynamic \
+  --llvm-nm "$LLVM_BUILD/bin/llvm-nm" \
+  --output /data/icflow-dynamic/icall-pair-manifest.json
+```
+
 Verify the binary/ground-truth pairs:
 
 ```bash
@@ -389,7 +421,8 @@ This is the full dataset pipeline:
    ELF binaries.
 3. Run `collect_dynamic.sh` on the same list to execute package tests through
    MyPinTool and collect the dynamic `*_icall.json` and `*_ijump.json` ground
-   truth.
+   truth. This step also creates per-callsite static, dynamic, and same-type
+   non-address-taken pair reports.
 
 Generate current lists from the Arch package API:
 
@@ -413,14 +446,21 @@ BUILD_TIMEOUT=1800 \
 Collect dynamic ICFlow for Core or Extra:
 
 ```bash
+CLEAN_WORKTREES=1 DYNAMIC_ONLY=1 \
 WORK_ROOT=/data/work-core \
 ./collect_dynamic.sh \
   "$HOME/arch_packages/core/clone_urls.txt" /data/dynamic-core
 
+CLEAN_WORKTREES=1 DYNAMIC_ONLY=1 \
 WORK_ROOT=/data/work-extra \
 ./collect_dynamic.sh \
   "$HOME/arch_packages/extra/clone_urls.txt" /data/dynamic-extra
 ```
+
+`CLEAN_WORKTREES=1` removes a package checkout only after collection has copied
+its logs and artifacts. `DYNAMIC_ONLY=1` retains only binaries whose MyPinTool
+output contains at least one dynamic indirect-call pair. Leave either option at
+its default `0` when debugging a failed package or retaining empty captures.
 
 Core and especially Extra require substantial time, network bandwidth, and
 disk space. The scripts record processed URLs so interrupted collection can be

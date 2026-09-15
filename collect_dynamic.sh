@@ -22,6 +22,11 @@ Optional environment variables:
   MAKEPKG_CONF  makepkg config (default: repository .makepkg.conf)
   BUILD_TIMEOUT First build timeout in seconds (default: 2000)
   TEST_TIMEOUT  Instrumented test timeout in seconds (default: 1800)
+  CLEAN_WORKTREES
+                Remove each package checkout after its logs/artifacts are
+                copied (0 or 1; default: 0)
+  DYNAMIC_ONLY  Keep artifacts only for binaries with an observed indirect
+                call edge (0 or 1; default: 0)
 EOF
 }
 
@@ -48,7 +53,7 @@ fi
 : "${LLVM_BUILD:?LLVM_BUILD must point to the custom LLVM build directory}"
 : "${PIN_ROOT:?PIN_ROOT must point to the Intel Pin kit root}"
 
-for command in file find git makepkg realpath sed timeout; do
+for command in file find git grep makepkg python3 realpath sed timeout; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "Required command not found: $command" >&2
         exit 1
@@ -78,14 +83,27 @@ MAKEPKG_CONF=$(realpath "$MAKEPKG_CONF")
 DEFAULT_MAKEPKG_CONF=$(realpath "$DEFAULT_MAKEPKG_CONF")
 BUILD_TIMEOUT=${BUILD_TIMEOUT:-2000}
 TEST_TIMEOUT=${TEST_TIMEOUT:-1800}
+CLEAN_WORKTREES=${CLEAN_WORKTREES:-0}
+DYNAMIC_ONLY=${DYNAMIC_ONLY:-0}
 
 if [[ ! $BUILD_TIMEOUT =~ ^[1-9][0-9]*$ || ! $TEST_TIMEOUT =~ ^[1-9][0-9]*$ ]]; then
     echo "BUILD_TIMEOUT and TEST_TIMEOUT must be positive integers." >&2
     exit 1
 fi
+if [[ $CLEAN_WORKTREES != 0 && $CLEAN_WORKTREES != 1 ]]; then
+    echo "CLEAN_WORKTREES must be 0 or 1." >&2
+    exit 1
+fi
+if [[ $DYNAMIC_ONLY != 0 && $DYNAMIC_ONLY != 1 ]]; then
+    echo "DYNAMIC_ONLY must be 0 or 1." >&2
+    exit 1
+fi
 
-if [[ ! -x "$LLVM_BUILD/bin/clang" || ! -x "$LLVM_BUILD/bin/clang++" || ! -x "$LLVM_BUILD/bin/ld.lld" ]]; then
-    echo "Custom clang/clang++/ld.lld not found under: $LLVM_BUILD/bin" >&2
+if [[ ! -x "$LLVM_BUILD/bin/clang" ||
+      ! -x "$LLVM_BUILD/bin/clang++" ||
+      ! -x "$LLVM_BUILD/bin/ld.lld" ||
+      ! -x "$LLVM_BUILD/bin/llvm-nm" ]]; then
+    echo "Custom clang/clang++/ld.lld/llvm-nm not found under: $LLVM_BUILD/bin" >&2
     exit 1
 fi
 
@@ -128,18 +146,64 @@ trap restore_current_package EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+has_dynamic_icall_edges() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        payload = json.load(stream)
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(2)
+
+has_edges = isinstance(payload, dict) and any(
+    isinstance(targets, list) and bool(targets) for targets in payload.values()
+)
+raise SystemExit(0 if has_edges else 1)
+PY
+}
+
+copy_artifact() {
+    local repository_dir=$1
+    local package_output=$2
+    local source=$3
+    local relative destination
+
+    relative=${source#"$repository_dir"/}
+    destination="$package_output/artifacts/$relative"
+    mkdir -p "$(dirname "$destination")"
+    cp -- "$source" "$destination"
+}
+
 collect_artifacts() {
     local repository_dir=$1
     local package_output=$2
-    local result relative destination binary
+    local result binary ijump edge_status
 
     mkdir -p "$package_output/artifacts"
 
     while IFS= read -r -d '' result; do
-        relative=${result#"$repository_dir"/}
-        destination="$package_output/artifacts/$relative"
-        mkdir -p "$(dirname "$destination")"
-        cp -- "$result" "$destination"
+        if [[ $DYNAMIC_ONLY == 1 ]]; then
+            [[ $result == *'_icall.json' ]] || continue
+            if has_dynamic_icall_edges "$result"; then
+                edge_status=0
+            else
+                edge_status=$?
+            fi
+            if (( edge_status == 1 )); then
+                continue
+            fi
+        fi
+
+        copy_artifact "$repository_dir" "$package_output" "$result"
+
+        if [[ $DYNAMIC_ONLY == 1 ]]; then
+            ijump=${result%_icall.json}_ijump.json
+            if [[ -f $ijump ]]; then
+                copy_artifact "$repository_dir" "$package_output" "$ijump"
+            fi
+        fi
 
         binary=${result%_icall.json}
         binary=${binary%_ijump.json}
@@ -147,12 +211,34 @@ collect_artifacts() {
             binary=${binary%.orig}
         fi
         if [[ -f $binary ]]; then
-            relative=${binary#"$repository_dir"/}
-            destination="$package_output/artifacts/$relative"
-            mkdir -p "$(dirname "$destination")"
-            cp -- "$binary" "$destination"
+            copy_artifact "$repository_dir" "$package_output" "$binary"
         fi
     done < <(find "$repository_dir/src" -type f \( -name '*_icall.json' -o -name '*_ijump.json' \) -size +2c -print0 2>/dev/null)
+}
+
+cleanup_worktree() {
+    local url=$1
+    local package_name repository_dir
+
+    [[ $CLEAN_WORKTREES == 1 ]] || return 0
+    package_name=$(basename "$url" .git)
+    if [[ -z $package_name || $package_name == . || $package_name == .. ]]; then
+        echo "Refusing to clean invalid package worktree for: $url" >&2
+        return 1
+    fi
+    repository_dir="$WORK_ROOT/$package_name"
+    case "$repository_dir" in
+        "$WORK_ROOT"/*) ;;
+        *)
+            echo "Refusing to clean worktree outside WORK_ROOT: $repository_dir" >&2
+            return 1
+            ;;
+    esac
+    if [[ -d $repository_dir ]]; then
+        chmod -R u+w "$repository_dir" 2>/dev/null || true
+        rm -rf -- "$repository_dir"
+        echo "Cleaned package worktree: $repository_dir" | tee -a "$SUMMARY_LOG"
+    fi
 }
 
 write_instrumented_pkgbuild() {
@@ -246,6 +332,18 @@ process_package() {
     collect_artifacts "$repository_dir" "$package_output"
     restore_current_package
 
+    if find "$package_output/artifacts" -type f -name '*_icall.json' -print -quit | grep -q .; then
+        if ! python3 "$SCRIPT_DIR/llm_test_generation/analyze_icall_pairs.py" \
+            --collection-root "$package_output/artifacts" \
+            --llvm-nm "$LLVM_BUILD/bin/llvm-nm" \
+            --output "$package_output/icall-pair-manifest.json" \
+            >> "$package_output/pair-analysis.log" 2>&1; then
+            echo "Indirect-call pair analysis failed: $url" \
+                | tee -a "$SUMMARY_LOG" >&2
+            return 1
+        fi
+    fi
+
     if [[ ! -s "$execution_log" ]]; then
         echo "No wrapped test executable ran: $url" | tee -a "$SUMMARY_LOG" >&2
         return 1
@@ -263,6 +361,7 @@ while IFS= read -r url || [[ -n $url ]]; do
 
     if grep -Fxq "$url" "$PROCESSED_FILE"; then
         echo "Already processed: $url" | tee -a "$SUMMARY_LOG"
+        cleanup_worktree "$url" || true
         continue
     fi
 
@@ -272,7 +371,17 @@ while IFS= read -r url || [[ -n $url ]]; do
         echo "[$(date --iso-8601=seconds)] FAIL  $url" | tee -a "$SUMMARY_LOG" >&2
         failures=$((failures + 1))
     fi
+    cleanup_worktree "$url" || true
 done < "$URL_LIST"
+
+if find "$OUTPUT_ROOT" -path '*/artifacts/*' -type f \
+    -name '*_icall.json' -print -quit | grep -q .; then
+    python3 "$SCRIPT_DIR/llm_test_generation/analyze_icall_pairs.py" \
+        --collection-root "$OUTPUT_ROOT" \
+        --llvm-nm "$LLVM_BUILD/bin/llvm-nm" \
+        --output "$OUTPUT_ROOT/icall-pair-manifest.json" \
+        > "$OUTPUT_ROOT/pair-analysis.log"
+fi
 
 if (( failures > 0 )); then
     echo "Collection finished with $failures failed package(s). See: $FAILURE_FILE" >&2

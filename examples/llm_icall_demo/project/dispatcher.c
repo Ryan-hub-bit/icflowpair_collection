@@ -14,6 +14,7 @@ typedef int (*operation_fn)(int);
 static NOINLINE int increment(int value) { return value + 1; }
 static NOINLINE int decrement(int value) { return value - 1; }
 static NOINLINE int double_value(int value) { return value * 2; }
+static NOINLINE int same_type_not_address_taken(int value) { return value; }
 
 static operation_fn select_operation(const char *name) {
     if (strcmp(name, "increment") == 0) {
@@ -55,6 +56,10 @@ int main(int argc, char **argv) {
         return 2;
     }
     actual = dispatch(operation, 41);
+    if (same_type_not_address_taken(actual) != actual) {
+        fprintf(stderr, "same-type direct-call check failed\n");
+        return 1;
+    }
     if (actual != expected) {
         fprintf(stderr, "%s returned %d, expected %ld\n", argv[1], actual, expected);
         return 1;

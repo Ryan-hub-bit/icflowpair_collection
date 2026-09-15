@@ -46,8 +46,10 @@ PIN_ROOT=$(realpath "$PIN_ROOT")
 PINTOOL=${PINTOOL:-"$PIN_ROOT/source/tools/MyPinTool/obj-intel64/MyPinTool.so"}
 PINTOOL=$(realpath "$PINTOOL")
 
-if [[ ! -x "$LLVM_BUILD/bin/clang" || ! -x "$LLVM_BUILD/bin/ld.lld" ]]; then
-    echo "Custom clang and ld.lld are required under: $LLVM_BUILD/bin" >&2
+if [[ ! -x "$LLVM_BUILD/bin/clang" ||
+      ! -x "$LLVM_BUILD/bin/ld.lld" ||
+      ! -x "$LLVM_BUILD/bin/llvm-nm" ]]; then
+    echo "Custom clang, ld.lld, and llvm-nm are required under: $LLVM_BUILD/bin" >&2
     exit 1
 fi
 if [[ ! -x "$PIN_ROOT/pin" ]]; then
@@ -77,7 +79,7 @@ CANDIDATE_DIR="$OUTPUT_ROOT/candidate"
 mkdir -p "$PROJECT_DIR" "$BASELINE_DIR" "$CANDIDATE_DIR"
 cp -a "$DEMO_DIR/project/." "$PROJECT_DIR/"
 
-echo "[1/7] Render the project-specific prompt without an API request"
+echo "[1/8] Render the project-specific prompt without an API request"
 (
     cd "$SCRIPT_DIR"
     python3 -m llm_test_generation.generate_tests "$PROJECT_DIR" \
@@ -86,7 +88,7 @@ echo "[1/7] Render the project-specific prompt without an API request"
 )
 grep -q "maximize the number of unique" "$OUTPUT_ROOT/rendered_prompt.md"
 
-echo "[2/7] Materialize a deterministic example of the structured model response"
+echo "[2/8] Materialize a deterministic example of the structured model response"
 (
     cd "$SCRIPT_DIR"
     python3 -m llm_test_generation.generate_tests "$PROJECT_DIR" \
@@ -95,7 +97,7 @@ echo "[2/7] Materialize a deterministic example of the structured model response
 )
 cp -a "$GENERATED_DIR/tests/." "$PROJECT_DIR/tests/"
 
-echo "[3/7] Build the project with the custom LLVM clang and lld"
+echo "[3/8] Build the project with the custom LLVM clang and lld"
 "$LLVM_BUILD/bin/clang" --version | head -n 1 | tee "$OUTPUT_ROOT/clang-version.txt"
 make -C "$PROJECT_DIR" \
     CC="$LLVM_BUILD/bin/clang" \
@@ -111,7 +113,7 @@ restore_binary() {
 }
 trap restore_binary EXIT
 
-echo "[4/7] Wrap the test executable with MyPinTool"
+echo "[4/8] Wrap the test executable with MyPinTool"
 PIN_ROOT="$PIN_ROOT" PINTOOL="$PINTOOL" \
     WRAP_LOG="$OUTPUT_ROOT/wrapped-executions.tsv" \
     "$SCRIPT_DIR/wrap_with_mypintool.sh" "$PROJECT_DIR"
@@ -120,20 +122,34 @@ wrapped=1
 ICALL_JSON="$PROJECT_DIR/icall_demo.orig_icall.json"
 IJUMP_JSON="$PROJECT_DIR/icall_demo.orig_ijump.json"
 
-echo "[5/7] Run the native input through make check and save the baseline"
+echo "[5/8] Run the native input through make check and save the baseline"
 make -C "$PROJECT_DIR" check TEST_CASE_FILE=tests/native_cases.txt
 jq -e 'type == "object" and length > 0' "$ICALL_JSON" >/dev/null
 cp "$ICALL_JSON" "$BASELINE_DIR/$(basename "$ICALL_JSON")"
 cp "$IJUMP_JSON" "$BASELINE_DIR/$(basename "$IJUMP_JSON")"
 
-echo "[6/7] Run the generated input through make check"
+echo "[6/8] Run the generated input through make check"
 rm -f -- "$ICALL_JSON" "$IJUMP_JSON"
 make -C "$PROJECT_DIR" check TEST_CASE_FILE=tests/generated_cases.txt
 jq -e 'type == "object" and length > 0' "$ICALL_JSON" >/dev/null
 cp "$ICALL_JSON" "$CANDIDATE_DIR/$(basename "$ICALL_JSON")"
 cp "$IJUMP_JSON" "$CANDIDATE_DIR/$(basename "$IJUMP_JSON")"
 
-echo "[7/7] Require the generated input to add at least two indirect-call pairs"
+echo "[7/8] Verify all three pair classes for every labeled callsite"
+(
+    cd "$SCRIPT_DIR"
+    python3 -m llm_test_generation.analyze_icall_pairs \
+        "$PROJECT_DIR/icall_demo.orig" \
+        --icall-json "$CANDIDATE_DIR/$(basename "$ICALL_JSON")" \
+        --llvm-nm "$LLVM_BUILD/bin/llvm-nm" \
+        --output "$OUTPUT_ROOT/icall-pairs.json" \
+        --require-dynamic \
+        --require-static \
+        --require-same-type-non-address-taken \
+        --require-dynamic-covered
+)
+
+echo "[8/8] Require the generated input to add at least two indirect-call pairs"
 (
     cd "$SCRIPT_DIR"
     python3 -m llm_test_generation.compare_icall_pairs \
