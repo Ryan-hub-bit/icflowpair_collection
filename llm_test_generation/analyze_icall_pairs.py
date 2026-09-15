@@ -73,6 +73,23 @@ def parse_nm_output(output: str, *, path: Path) -> list[dict[str, Any]]:
         if not line.strip():
             continue
         fields = line.rsplit(maxsplit=3)
+        # llvm-nm emits section/segment symbols with an empty name in POSIX
+        # format.  Such a record has only ``type value size`` fields (for
+        # example ``" a 0 0"``) and cannot carry one of our labels, so ignore
+        # it while still validating the numeric fields.  Without this case,
+        # every real ELF produced by lld can fail analysis before labels are
+        # inspected.
+        if len(fields) == 3:
+            symbol_type, value_text, size_text = fields
+            try:
+                int(value_text, 16)
+                int(size_text, 16)
+            except ValueError as error:
+                raise ValueError(
+                    f"{path}: invalid llvm-nm value on line {line_number}: {line!r}"
+                ) from error
+            if len(symbol_type) == 1:
+                continue
         if len(fields) != 4:
             raise ValueError(
                 f"{path}: unexpected llvm-nm output on line {line_number}: {line!r}"

@@ -8,6 +8,7 @@ from llm_test_generation.analyze_icall_pairs import (
     analyze_pair_sets,
     load_dynamic_edges,
     parse_label,
+    parse_nm_output,
 )
 
 
@@ -47,6 +48,12 @@ class LabelParsingTests(unittest.TestCase):
 
     def test_rejects_normal_symbol(self) -> None:
         self.assertIsNone(parse_label("ordinary_function"))
+
+    def test_ignores_unnamed_llvm_nm_symbols(self) -> None:
+        symbols = parse_nm_output(" a 0 0\nfoo t 401000 10\n", path=Path("test"))
+
+        self.assertEqual(len(symbols), 1)
+        self.assertEqual(symbols[0]["name"], "foo")
 
 
 class PairAnalysisTests(unittest.TestCase):
