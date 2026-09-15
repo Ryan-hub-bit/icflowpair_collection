@@ -27,6 +27,10 @@ Optional environment variables:
                 copied (0 or 1; default: 0)
   DYNAMIC_ONLY  Keep artifacts only for binaries with an observed indirect
                 call edge (0 or 1; default: 0)
+  PACKAGE_SET   Package collection name stored in package-info.json (default:
+                parent directory name of URL_LIST, such as core or extra)
+  MIN_FREE_GB   Pause with exit status 75 before starting another package if
+                either output/work filesystem has less free space (default: 25)
 EOF
 }
 
@@ -53,7 +57,7 @@ fi
 : "${LLVM_BUILD:?LLVM_BUILD must point to the custom LLVM build directory}"
 : "${PIN_ROOT:?PIN_ROOT must point to the Intel Pin kit root}"
 
-for command in file find git grep makepkg python3 realpath sed timeout; do
+for command in df file find git grep makepkg python3 realpath sed timeout; do
     if ! command -v "$command" >/dev/null 2>&1; then
         echo "Required command not found: $command" >&2
         exit 1
@@ -85,6 +89,8 @@ BUILD_TIMEOUT=${BUILD_TIMEOUT:-2000}
 TEST_TIMEOUT=${TEST_TIMEOUT:-1800}
 CLEAN_WORKTREES=${CLEAN_WORKTREES:-0}
 DYNAMIC_ONLY=${DYNAMIC_ONLY:-0}
+PACKAGE_SET=${PACKAGE_SET:-$(basename "$(dirname "$URL_LIST")")}
+MIN_FREE_GB=${MIN_FREE_GB:-25}
 
 if [[ ! $BUILD_TIMEOUT =~ ^[1-9][0-9]*$ || ! $TEST_TIMEOUT =~ ^[1-9][0-9]*$ ]]; then
     echo "BUILD_TIMEOUT and TEST_TIMEOUT must be positive integers." >&2
@@ -96,6 +102,10 @@ if [[ $CLEAN_WORKTREES != 0 && $CLEAN_WORKTREES != 1 ]]; then
 fi
 if [[ $DYNAMIC_ONLY != 0 && $DYNAMIC_ONLY != 1 ]]; then
     echo "DYNAMIC_ONLY must be 0 or 1." >&2
+    exit 1
+fi
+if [[ ! $MIN_FREE_GB =~ ^[0-9]+$ ]]; then
+    echo "MIN_FREE_GB must be a non-negative integer." >&2
     exit 1
 fi
 
@@ -132,6 +142,45 @@ PROCESSED_FILE="$OUTPUT_ROOT/processed_urls.txt"
 FAILURE_FILE="$OUTPUT_ROOT/failed_urls.txt"
 SUMMARY_LOG="$OUTPUT_ROOT/collection.log"
 touch "$PROCESSED_FILE" "$FAILURE_FILE" "$SUMMARY_LOG"
+
+ensure_free_space() {
+    local minimum_kb=$((MIN_FREE_GB * 1024 * 1024))
+    local available_kb
+
+    available_kb=$(df -Pk -- "$OUTPUT_ROOT" "$WORK_ROOT" "$HOME" | awk '
+        NR > 1 && $4 ~ /^[0-9]+$/ {
+            if (minimum == "" || $4 < minimum) minimum = $4
+        }
+        END { if (minimum != "") print minimum }
+    ')
+    if [[ -z $available_kb ]]; then
+        echo "Unable to determine free disk space for output/work filesystems." >&2
+        return 1
+    fi
+    if (( available_kb < minimum_kb )); then
+        echo "[$(date --iso-8601=seconds)] PAUSE free space is below ${MIN_FREE_GB} GiB; rerun the same command after adding space." \
+            | tee -a "$SUMMARY_LOG" >&2
+        return 75
+    fi
+}
+
+record_package_info() {
+    local url=$1
+    local status=$2
+    local package_name repository_dir package_output
+
+    package_name=$(basename "$url" .git)
+    repository_dir="$WORK_ROOT/$package_name"
+    package_output="$OUTPUT_ROOT/$package_name"
+    python3 "$SCRIPT_DIR/llm_test_generation/write_package_info.py" \
+        --repository-url "$url" \
+        --package-name "$package_name" \
+        --package-set "$PACKAGE_SET" \
+        --source-list "$URL_LIST" \
+        --repository-dir "$repository_dir" \
+        --package-output "$package_output" \
+        --status "$status"
+}
 
 current_source_dir=""
 
@@ -284,6 +333,7 @@ process_package() {
     mkdir -p "$package_output"
 
     echo "[$(date --iso-8601=seconds)] START $url" | tee -a "$SUMMARY_LOG"
+    record_package_info "$url" started
 
     if [[ ! -d "$repository_dir/.git" ]]; then
         if ! git clone --depth 1 "$url" "$repository_dir" 2>&1 | tee -a "$package_output/build.log"; then
@@ -291,6 +341,7 @@ process_package() {
             return 1
         fi
     fi
+    record_package_info "$url" started
 
     if [[ ! -f "$repository_dir/PKGBUILD" ]]; then
         echo "PKGBUILD not found: $url" | tee -a "$package_output/build.log" >&2
@@ -349,6 +400,7 @@ process_package() {
         return 1
     fi
 
+    record_package_info "$url" completed
     echo "$url" >> "$PROCESSED_FILE"
     echo "[$(date --iso-8601=seconds)] DONE  $url" | tee -a "$SUMMARY_LOG"
 }
@@ -365,8 +417,19 @@ while IFS= read -r url || [[ -n $url ]]; do
         continue
     fi
 
+    if ensure_free_space; then
+        :
+    else
+        free_space_status=$?
+        if (( free_space_status == 75 )); then
+            exit 75
+        fi
+        exit "$free_space_status"
+    fi
+
     if ! process_package "$url"; then
         restore_current_package
+        record_package_info "$url" failed || true
         echo "$url" >> "$FAILURE_FILE"
         echo "[$(date --iso-8601=seconds)] FAIL  $url" | tee -a "$SUMMARY_LOG" >&2
         failures=$((failures + 1))

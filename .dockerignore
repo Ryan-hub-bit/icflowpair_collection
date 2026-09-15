@@ -7,6 +7,7 @@
 !README.md
 !.makepkg.conf
 !collect_dynamic.sh
+!run_full_dynamic_collection.sh
 !collect_arch.sh
 !collect_arch_git.sh
 !wrap_with_mypintool.sh

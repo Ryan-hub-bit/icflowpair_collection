@@ -468,6 +468,22 @@ its logs and artifacts. `DYNAMIC_ONLY=1` retains only binaries whose MyPinTool
 output contains at least one dynamic indirect-call pair. Leave either option at
 its default `0` when debugging a failed package or retaining empty captures.
 
+Each package output also retains `package-info.json`, `PKGBUILD`, and `.SRCINFO`.
+The JSON records the Core/Extra set, repository URL, exact Git commit, package
+names/version, run status, and the paths and pair summary for every retained
+dynamic binary.
+
+To traverse Core and then Extra in one resumable run:
+
+```bash
+MIN_FREE_GB=25 ./run_full_dynamic_collection.sh \
+  > /data/full-dynamic-collection.log 2>&1
+```
+
+The runner pauses with exit status 75 before starting another package if free
+space falls below `MIN_FREE_GB`. Re-run the same command after adding space;
+URLs already listed in each output's `processed_urls.txt` are skipped.
+
 Core and especially Extra require substantial time, network bandwidth, and
 disk space. The scripts record processed URLs so interrupted collection can be
 resumed with the same command.
