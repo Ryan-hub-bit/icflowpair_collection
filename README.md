@@ -15,7 +15,7 @@ curl -LO https://github.com/Ryan-hub-bit/icflow_dynamic_collection/releases/down
 sha256sum -c icflow-dynamic-collection-amd64.tar.gz.sha256
 docker load < icflow-dynamic-collection-amd64.tar.gz
 
-git clone --branch codex/llm-test-generation \
+git clone --branch codex/icall-pair-verification \
   https://github.com/Ryan-hub-bit/icflow_dynamic_collection.git
 cd icflow_dynamic_collection
 docker build -f Dockerfile.prebuilt \
@@ -58,7 +58,7 @@ docker exec -it icflow bash
 Clone the repository and build the Arch Linux environment:
 
 ```bash
-git clone --branch codex/llm-test-generation \
+git clone --branch codex/icall-pair-verification \
   https://github.com/Ryan-hub-bit/icflow_dynamic_collection.git
 cd icflow_dynamic_collection
 
@@ -80,8 +80,10 @@ Run the remaining commands inside the container.
 ### Compile the custom LLVM
 
 ```bash
-git clone https://github.com/Ryan-hub-bit/llvm-project.git "$HOME/llvm-project"
+git clone --branch negativefunctype \
+  https://github.com/Ryan-hub-bit/llvm-project.git "$HOME/llvm-project"
 cd "$HOME/llvm-project"
+test "$(git rev-parse --abbrev-ref HEAD)" = negativefunctype
 
 cmake -S llvm -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
@@ -130,7 +132,7 @@ container first:
 
 ```bash
 cd /workspace/icflow_dynamic_collection
-git fetch origin codex/llm-test-generation
+git fetch origin codex/icall-pair-verification
 git switch --detach FETCH_HEAD
 ```
 
@@ -314,7 +316,7 @@ Verified fixture result on an x86-64 Ubuntu Docker host (August 26, 2026):
 
 - Both `Dockerfile` and `Dockerfile.prebuilt` built successfully.
 - The ready image found the custom LLVM/Clang 20 build, lld, Pin, and MyPinTool.
-- All 12 Python tests passed during the image build.
+- All 18 Python tests passed during the image build.
 - Native `make check` observed 1 indirect-call pair.
 - Generated-input `make check` observed 3 pairs, including 2 new pairs from the
   same call site; the verification container exited with status 0.
