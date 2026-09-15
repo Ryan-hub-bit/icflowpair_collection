@@ -473,6 +473,12 @@ The JSON records the Core/Extra set, repository URL, exact Git commit, package
 names/version, run status, and the paths and pair summary for every retained
 dynamic binary.
 
+All retained ELF binaries are also placed in one collision-safe flat folder,
+`$DATA_ROOT/binaries/`. The canonical absolute path for every binary is stored
+with its package/repository/commit and ICALL/pair-report paths in
+`$DATA_ROOT/binary-index.json`. Per-package `package-info.json` files repeat
+their canonical paths in `flat_binary_paths`.
+
 To traverse Core and then Extra in one resumable run:
 
 ```bash

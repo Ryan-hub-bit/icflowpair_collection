@@ -144,6 +144,23 @@ def update_package_info(
         info["retained_dynamic_binaries"] = []
         info["retained_dynamic_binary_count"] = 0
 
+    flat_records_path = output / "retained-binaries.json"
+    if flat_records_path.is_file():
+        try:
+            flat_records = json.loads(flat_records_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            flat_records = []
+        if isinstance(flat_records, list):
+            info["flat_binary_paths"] = [
+                record["binary_path"]
+                for record in flat_records
+                if isinstance(record, dict) and isinstance(record.get("binary_path"), str)
+            ]
+        else:
+            info["flat_binary_paths"] = []
+    else:
+        info["flat_binary_paths"] = []
+
     temporary = info_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
     temporary.replace(info_path)

@@ -31,6 +31,8 @@ Optional environment variables:
                 parent directory name of URL_LIST, such as core or extra)
   MIN_FREE_GB   Pause with exit status 75 before starting another package if
                 either output/work filesystem has less free space (default: 25)
+  BINARY_STORE  Flat directory containing every retained dynamic binary
+                (default: OUTPUT_DIRECTORY/binaries)
 EOF
 }
 
@@ -142,6 +144,9 @@ PROCESSED_FILE="$OUTPUT_ROOT/processed_urls.txt"
 FAILURE_FILE="$OUTPUT_ROOT/failed_urls.txt"
 SUMMARY_LOG="$OUTPUT_ROOT/collection.log"
 touch "$PROCESSED_FILE" "$FAILURE_FILE" "$SUMMARY_LOG"
+BINARY_STORE=${BINARY_STORE:-"$OUTPUT_ROOT/binaries"}
+mkdir -p "$BINARY_STORE"
+BINARY_STORE=$(realpath "$BINARY_STORE")
 
 ensure_free_space() {
     local minimum_kb=$((MIN_FREE_GB * 1024 * 1024))
@@ -390,6 +395,13 @@ process_package() {
             --output "$package_output/icall-pair-manifest.json" \
             >> "$package_output/pair-analysis.log" 2>&1; then
             echo "Indirect-call pair analysis failed: $url" \
+                | tee -a "$SUMMARY_LOG" >&2
+            return 1
+        fi
+        if ! python3 "$SCRIPT_DIR/llm_test_generation/store_dynamic_binaries.py" \
+            --package-output "$package_output" \
+            --binary-store "$BINARY_STORE"; then
+            echo "Flat binary storage/indexing failed: $url" \
                 | tee -a "$SUMMARY_LOG" >&2
             return 1
         fi
