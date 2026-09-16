@@ -196,6 +196,12 @@ restore_current_package() {
     current_source_dir=""
 }
 
+terminate_package_processes() {
+    local repository_dir=$1
+    python3 "$SCRIPT_DIR/llm_test_generation/terminate_package_processes.py" \
+        "$repository_dir" --grace-seconds 5 || true
+}
+
 trap restore_current_package EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -353,12 +359,19 @@ process_package() {
         return 1
     fi
 
-    if ! (
+    local build_status=0
+    if (
         cd "$repository_dir"
         timeout "$BUILD_TIMEOUT" makepkg \
             --config "$MAKEPKG_CONF" \
             --force --syncdeps --noconfirm --needed --skippgpcheck --nocheck
-    ) 2>&1 | tee -a "$package_output/build.log"; then
+    ) >> "$package_output/build.log" 2>&1; then
+        build_status=0
+    else
+        build_status=$?
+    fi
+    terminate_package_processes "$repository_dir"
+    if (( build_status != 0 )); then
         echo "Initial build failed: $url" >&2
         return 1
     fi
@@ -374,13 +387,20 @@ process_package() {
     write_instrumented_pkgbuild \
         "$repository_dir/PKGBUILD" "$instrumented_pkgbuild" "$execution_log"
 
-    if ! (
+    local test_status=0
+    if (
         cd "$repository_dir"
         timeout "$TEST_TIMEOUT" makepkg \
             --config "$MAKEPKG_CONF" \
             -p "${instrumented_pkgbuild##*/}" \
             --force --syncdeps --noconfirm --needed --skippgpcheck
-    ) 2>&1 | tee -a "$package_output/test.log"; then
+    ) >> "$package_output/test.log" 2>&1; then
+        test_status=0
+    else
+        test_status=$?
+    fi
+    terminate_package_processes "$repository_dir"
+    if (( test_status != 0 )); then
         echo "Instrumented tests failed or timed out: $url" | tee -a "$SUMMARY_LOG" >&2
     fi
     rm -f -- "$instrumented_pkgbuild"

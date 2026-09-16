@@ -489,6 +489,10 @@ MIN_FREE_GB=25 ./run_full_dynamic_collection.sh \
 The runner pauses with exit status 75 before starting another package if free
 space falls below `MIN_FREE_GB`. Re-run the same command after adding space;
 URLs already listed in each output's `processed_urls.txt` are skipped.
+Build and test output is written directly to each package log, so a detached
+test cannot hold a `tee` pipeline open after its timeout. Any processes that
+escape the package timeout are terminated before artifacts are copied and the
+worktree is cleaned.
 
 Core and especially Extra require substantial time, network bandwidth, and
 disk space. The scripts record processed URLs so interrupted collection can be
