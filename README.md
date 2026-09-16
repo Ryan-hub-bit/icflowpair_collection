@@ -479,6 +479,12 @@ with its package/repository/commit and ICALL/pair-report paths in
 `$DATA_ROOT/binary-index.json`. Per-package `package-info.json` files repeat
 their canonical paths in `flat_binary_paths`.
 
+The full runner sets `ANALYZE_STATIC_PAIRS=0`: collection keeps the labeled
+binary and non-empty raw `*_icall.json` ground truth, but does not invoke
+`llvm-nm`, create `*_pairs.json`, or compute static/kind-2 candidate sets.
+Those can be extracted later from the labels embedded in each retained binary.
+Set `ANALYZE_STATIC_PAIRS=1` only for an explicit offline static-analysis pass.
+
 To traverse Core and then Extra in one resumable run:
 
 ```bash

@@ -33,6 +33,9 @@ Optional environment variables:
                 either output/work filesystem has less free space (default: 25)
   BINARY_STORE  Flat directory containing every retained dynamic binary
                 (default: OUTPUT_DIRECTORY/binaries)
+  ANALYZE_STATIC_PAIRS
+                Run llvm-nm type-based static pair analysis (0 or 1;
+                default: 0). Leave disabled for dynamic ground truth only.
 EOF
 }
 
@@ -93,6 +96,7 @@ CLEAN_WORKTREES=${CLEAN_WORKTREES:-0}
 DYNAMIC_ONLY=${DYNAMIC_ONLY:-0}
 PACKAGE_SET=${PACKAGE_SET:-$(basename "$(dirname "$URL_LIST")")}
 MIN_FREE_GB=${MIN_FREE_GB:-25}
+ANALYZE_STATIC_PAIRS=${ANALYZE_STATIC_PAIRS:-0}
 
 if [[ ! $BUILD_TIMEOUT =~ ^[1-9][0-9]*$ || ! $TEST_TIMEOUT =~ ^[1-9][0-9]*$ ]]; then
     echo "BUILD_TIMEOUT and TEST_TIMEOUT must be positive integers." >&2
@@ -108,6 +112,10 @@ if [[ $DYNAMIC_ONLY != 0 && $DYNAMIC_ONLY != 1 ]]; then
 fi
 if [[ ! $MIN_FREE_GB =~ ^[0-9]+$ ]]; then
     echo "MIN_FREE_GB must be a non-negative integer." >&2
+    exit 1
+fi
+if [[ $ANALYZE_STATIC_PAIRS != 0 && $ANALYZE_STATIC_PAIRS != 1 ]]; then
+    echo "ANALYZE_STATIC_PAIRS must be 0 or 1." >&2
     exit 1
 fi
 
@@ -409,18 +417,25 @@ process_package() {
     restore_current_package
 
     if find "$package_output/artifacts" -type f -name '*_icall.json' -print -quit | grep -q .; then
-        if ! python3 "$SCRIPT_DIR/llm_test_generation/analyze_icall_pairs.py" \
-            --collection-root "$package_output/artifacts" \
-            --llvm-nm "$LLVM_BUILD/bin/llvm-nm" \
-            --output "$package_output/icall-pair-manifest.json" \
-            >> "$package_output/pair-analysis.log" 2>&1; then
-            echo "Indirect-call pair analysis failed: $url" \
-                | tee -a "$SUMMARY_LOG" >&2
-            return 1
+        local -a store_arguments=(
+            --package-output "$package_output"
+            --binary-store "$BINARY_STORE"
+        )
+        if [[ $ANALYZE_STATIC_PAIRS == 1 ]]; then
+            if ! python3 "$SCRIPT_DIR/llm_test_generation/analyze_icall_pairs.py" \
+                --collection-root "$package_output/artifacts" \
+                --llvm-nm "$LLVM_BUILD/bin/llvm-nm" \
+                --output "$package_output/icall-pair-manifest.json" \
+                >> "$package_output/pair-analysis.log" 2>&1; then
+                echo "Indirect-call pair analysis failed: $url" \
+                    | tee -a "$SUMMARY_LOG" >&2
+                return 1
+            fi
+        else
+            store_arguments+=(--dynamic-only)
         fi
         if ! python3 "$SCRIPT_DIR/llm_test_generation/store_dynamic_binaries.py" \
-            --package-output "$package_output" \
-            --binary-store "$BINARY_STORE"; then
+            "${store_arguments[@]}"; then
             echo "Flat binary storage/indexing failed: $url" \
                 | tee -a "$SUMMARY_LOG" >&2
             return 1
@@ -469,7 +484,8 @@ while IFS= read -r url || [[ -n $url ]]; do
     cleanup_worktree "$url" || true
 done < "$URL_LIST"
 
-if find "$OUTPUT_ROOT" -path '*/artifacts/*' -type f \
+if [[ $ANALYZE_STATIC_PAIRS == 1 ]] && \
+   find "$OUTPUT_ROOT" -path '*/artifacts/*' -type f \
     -name '*_icall.json' -print -quit | grep -q .; then
     python3 "$SCRIPT_DIR/llm_test_generation/analyze_icall_pairs.py" \
         --collection-root "$OUTPUT_ROOT" \

@@ -156,6 +156,26 @@ def update_package_info(
                 for record in flat_records
                 if isinstance(record, dict) and isinstance(record.get("binary_path"), str)
             ]
+            info["retained_dynamic_binary_count"] = len(info["flat_binary_paths"])
+            info["dynamic_summary"] = {
+                "binary_count": len(info["flat_binary_paths"]),
+                "dynamic_pair_count": sum(
+                    int(record.get("pair_summary", {}).get("dynamic_pair_count", 0))
+                    for record in flat_records
+                    if isinstance(record, dict)
+                    and isinstance(record.get("pair_summary"), dict)
+                ),
+                "dynamic_callsite_count": sum(
+                    int(
+                        record.get("pair_summary", {}).get(
+                            "dynamic_callsite_count", 0
+                        )
+                    )
+                    for record in flat_records
+                    if isinstance(record, dict)
+                    and isinstance(record.get("pair_summary"), dict)
+                ),
+            }
         else:
             info["flat_binary_paths"] = []
     else:

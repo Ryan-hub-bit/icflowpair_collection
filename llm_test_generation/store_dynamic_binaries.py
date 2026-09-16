@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
+ICALL_SUFFIX = "_icall.json"
+
+
 def load_object(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
@@ -52,8 +55,50 @@ def place_binary(source: Path, destination: Path) -> None:
     temporary.replace(destination)
 
 
+def dynamic_reports(artifact_root: Path) -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    for icall_path in sorted(artifact_root.rglob(f"*{ICALL_SUFFIX}")):
+        payload = json.loads(icall_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            continue
+        dynamic_callsite_count = 0
+        dynamic_pair_count = 0
+        for targets in payload.values():
+            if not isinstance(targets, list) or not targets:
+                continue
+            dynamic_callsite_count += 1
+            dynamic_pair_count += len(set(targets))
+        if dynamic_pair_count == 0:
+            continue
+
+        binary_name = icall_path.name[: -len(ICALL_SUFFIX)]
+        binary = icall_path.with_name(binary_name)
+        if not binary.is_file() and binary_name.endswith(".orig"):
+            binary = icall_path.with_name(binary_name[: -len(".orig")])
+        if not binary.is_file():
+            raise ValueError(f"Binary for dynamic ICALL data is missing: {icall_path}")
+
+        reports.append(
+            {
+                "binary": str(binary.relative_to(artifact_root)),
+                "icall_json": str(icall_path.relative_to(artifact_root)),
+                "pair_report": None,
+                "summary": {
+                    "dynamic_callsite_count": dynamic_callsite_count,
+                    "dynamic_pair_count": dynamic_pair_count,
+                    "has_dynamic_pairs": True,
+                },
+            }
+        )
+    return reports
+
+
 def store_dynamic_binaries(
-    *, package_output: Path, binary_store: Path, index_path: Path
+    *,
+    package_output: Path,
+    binary_store: Path,
+    index_path: Path,
+    dynamic_only: bool = False,
 ) -> list[dict[str, Any]]:
     package_output = package_output.resolve()
     binary_store = binary_store.resolve()
@@ -61,15 +106,18 @@ def store_dynamic_binaries(
     artifact_root = (package_output / "artifacts").resolve()
     package_info_path = package_output / "package-info.json"
     package_info = load_object(package_info_path)
-    manifest = load_object(package_output / "icall-pair-manifest.json")
 
     package_name = str(package_info.get("package_name") or package_output.name)
     package_set = str(package_info.get("package_set") or "unknown")
     repository_url = package_info.get("repository_url")
     git_commit = package_info.get("git_commit")
-    reports = manifest.get("reports", [])
-    if not isinstance(reports, list):
-        raise ValueError("icall-pair-manifest.json reports must be an array")
+    if dynamic_only:
+        reports = dynamic_reports(artifact_root)
+    else:
+        manifest = load_object(package_output / "icall-pair-manifest.json")
+        reports = manifest.get("reports", [])
+        if not isinstance(reports, list):
+            raise ValueError("icall-pair-manifest.json reports must be an array")
 
     binary_store.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
@@ -121,6 +169,9 @@ def store_dynamic_binaries(
                 "icall_json_path": artifact_path("icall_json"),
                 "pair_report_path": artifact_path("pair_report"),
                 "pair_summary": summary,
+                "collection_mode": (
+                    "dynamic_ground_truth_only" if dynamic_only else "dynamic_and_static"
+                ),
             }
         )
 
@@ -159,6 +210,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--package-output", required=True, type=Path)
     parser.add_argument("--binary-store", required=True, type=Path)
     parser.add_argument("--index", type=Path)
+    parser.add_argument(
+        "--dynamic-only",
+        action="store_true",
+        help="Index directly from non-empty *_icall.json without static analysis",
+    )
     return parser
 
 
@@ -169,6 +225,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         package_output=arguments.package_output,
         binary_store=arguments.binary_store,
         index_path=index_path,
+        dynamic_only=arguments.dynamic_only,
     )
     return 0
 
