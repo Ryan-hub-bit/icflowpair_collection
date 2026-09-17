@@ -26,6 +26,7 @@ run_collection() {
     CLEAN_WORKTREES=1 \
     DYNAMIC_ONLY=1 \
     ANALYZE_STATIC_PAIRS=0 \
+    RETRY_FAILED=0 \
     PACKAGE_SET="$package_set" \
     BINARY_STORE="$DATA_ROOT/binaries" \
     MIN_FREE_GB="$MIN_FREE_GB" \

@@ -36,6 +36,8 @@ Optional environment variables:
   ANALYZE_STATIC_PAIRS
                 Run llvm-nm type-based static pair analysis (0 or 1;
                 default: 0). Leave disabled for dynamic ground truth only.
+  RETRY_FAILED  Retry URLs already recorded in failed_urls.txt (0 or 1;
+                default: 0). Keep disabled to resume after prior failures.
 EOF
 }
 
@@ -97,6 +99,7 @@ DYNAMIC_ONLY=${DYNAMIC_ONLY:-0}
 PACKAGE_SET=${PACKAGE_SET:-$(basename "$(dirname "$URL_LIST")")}
 MIN_FREE_GB=${MIN_FREE_GB:-25}
 ANALYZE_STATIC_PAIRS=${ANALYZE_STATIC_PAIRS:-0}
+RETRY_FAILED=${RETRY_FAILED:-0}
 
 if [[ ! $BUILD_TIMEOUT =~ ^[1-9][0-9]*$ || ! $TEST_TIMEOUT =~ ^[1-9][0-9]*$ ]]; then
     echo "BUILD_TIMEOUT and TEST_TIMEOUT must be positive integers." >&2
@@ -116,6 +119,10 @@ if [[ ! $MIN_FREE_GB =~ ^[0-9]+$ ]]; then
 fi
 if [[ $ANALYZE_STATIC_PAIRS != 0 && $ANALYZE_STATIC_PAIRS != 1 ]]; then
     echo "ANALYZE_STATIC_PAIRS must be 0 or 1." >&2
+    exit 1
+fi
+if [[ $RETRY_FAILED != 0 && $RETRY_FAILED != 1 ]]; then
+    echo "RETRY_FAILED must be 0 or 1." >&2
     exit 1
 fi
 
@@ -453,13 +460,25 @@ process_package() {
 }
 
 failures=0
+declare -a package_urls=()
 
-while IFS= read -r url || [[ -n $url ]]; do
+# Read the complete list before launching any package command. Package build and
+# test processes may read standard input; keeping the URL file attached to a
+# `while read` loop allowed one such process to consume every remaining URL.
+mapfile -t package_urls < "$URL_LIST"
+
+for url in "${package_urls[@]}"; do
     url=${url%$'\r'}
     [[ -z $url || $url =~ ^[[:space:]]*# ]] && continue
 
     if grep -Fxq "$url" "$PROCESSED_FILE"; then
         echo "Already processed: $url" | tee -a "$SUMMARY_LOG"
+        cleanup_worktree "$url" || true
+        continue
+    fi
+
+    if [[ $RETRY_FAILED == 0 ]] && grep -Fxq "$url" "$FAILURE_FILE"; then
+        echo "Already failed (skipping): $url" | tee -a "$SUMMARY_LOG"
         cleanup_worktree "$url" || true
         continue
     fi
@@ -482,7 +501,7 @@ while IFS= read -r url || [[ -n $url ]]; do
         failures=$((failures + 1))
     fi
     cleanup_worktree "$url" || true
-done < "$URL_LIST"
+done
 
 if [[ $ANALYZE_STATIC_PAIRS == 1 ]] && \
    find "$OUTPUT_ROOT" -path '*/artifacts/*' -type f \
